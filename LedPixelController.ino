@@ -26,7 +26,7 @@ License.  If not, see <http://www.gnu.org/licenses/>.
 #include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
 
-// #define DEBUG // turn on debugging
+//#define DEBUG // turn on debugging
 
 // Allow analog voltage to be read
 ADC_MODE(ADC_VCC);
@@ -35,13 +35,13 @@ ADC_MODE(ADC_VCC);
 
     // E131 Packet Parser
     E131 e131;
-    
+
     // Networking
     const char* ssid     = "...";           // Replace with WiFi SSID
     const char* password = "...";           // Replace with WiFi Password
-    const char* domain = "esp8266.local";   // Replace with local domain name
+    const char* domain = "...";   // Replace with local domain name
     char name[11] = "LED_xxxxxx";
-    
+
     // State Machine
     const uint8_t STATE_STARTING = 0X00;
     const uint8_t STATE_CONNECTING = 0X01;
@@ -49,18 +49,18 @@ ADC_MODE(ADC_VCC);
     const uint8_t STATE_PROCESSING = 0X03;
     const uint8_t STATE_REFRESHING = 0X04;
     uint8_t state = STATE_STARTING;
-    
+
     // Settings
     const bool LED_ON = LOW;
     const bool LED_OFF = HIGH;
-    
+
     const uint8_t UNIVERSE_MAXCOUNT = 255;
     const uint8_t CHANNEL_COUNT = 8;
     const uint8_t PIXEL_SIZE = 3;
     const uint8_t PIXEL_COUNT = 150;
-    const uint8_t PINS[CHANNEL_COUNT] = {D0, D1, D2, D3, D5, D6, D7, D8};
+    const uint8_t PINS[CHANNEL_COUNT] = {16, 5, 4, 0, 14, 12, 13, 15};
     uint8_t universeToBuffer[UNIVERSE_MAXCOUNT];
-    
+
     // Colors (RGB)
     const uint8_t RED[PIXEL_SIZE]= {0x20, 0x00, 0x00};
     const uint8_t ORANGE[PIXEL_SIZE]= {0x20, 0x10, 0x00};
@@ -71,10 +71,10 @@ ADC_MODE(ADC_VCC);
     const uint8_t PURPLE[PIXEL_SIZE]= {0x20, 0x00, 0x20};
     const uint8_t BLACK[PIXEL_SIZE]= {0x00, 0x00, 0x00};
     const uint8_t WHITE[PIXEL_SIZE]= {0x20, 0x20, 0x20};
-    
+
     // Create the pixel Writer
     PixelWriterAsync pixelWriter(PIXEL_COUNT, PIXEL_SIZE, PINS, CHANNEL_COUNT);
-    
+
     // Declare some variables
     PixelBuffer buffers[CHANNEL_COUNT + 1]{
       {&pixelWriter, PIXEL_SIZE, PIXEL_COUNT, PINS, CHANNEL_COUNT},
@@ -87,12 +87,12 @@ ADC_MODE(ADC_VCC);
       {&pixelWriter, PIXEL_SIZE, PIXEL_COUNT, &PINS[6], 1},
       {&pixelWriter, PIXEL_SIZE, PIXEL_COUNT, &PINS[7], 1}
     };
-    
+
     bool wifiDisconnected = false;
 
 void setup() {
 
-  Serial.begin(500000); 
+  Serial.begin(115200);
   delay(100);
 
   // Clear the screen
@@ -160,7 +160,7 @@ uint8_t Start() {
   Serial.println(F("Starting..."));
 
   Serial.println(F("Starting PixelWriter service..."));
-  
+
   // Initialize the pixel writer
   pixelWriter.Initialize();
 
@@ -185,7 +185,7 @@ uint8_t Start() {
     if (bufferIndex > CHANNEL_COUNT) { bufferIndex = 0; }
 
     // Save the value in the array for easy lookup
-    universeToBuffer[universeIndex] = bufferIndex;   
+    universeToBuffer[universeIndex] = bufferIndex;
   }
 
   // Start OTA server.
@@ -215,7 +215,7 @@ uint8_t Connect() {
   // Make sure we are disconnected.
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  
+
   if (password != NULL){
     WiFi.begin(ssid, password);
   }else{
@@ -236,21 +236,21 @@ uint8_t Connect() {
     for (i = 0; i < pixelCount; i++){
         memcpy(repeatData + (i * PIXEL_SIZE), BLUE, PIXEL_SIZE);
     }
-    
+
     // Set the Black Pixel
     uint8_t pixelIndex = waitIndex % pixelCount;
     memcpy(repeatData + (pixelIndex * PIXEL_SIZE), BLACK, PIXEL_SIZE);
-    
-    buffers[0].SetRepeat(repeatData, dataLength); 
+
+    buffers[0].SetRepeat(repeatData, dataLength);
     buffers[0].Show();
 
     waitIndex++;
   }
-  
+
   Serial.println("");
   buffers[0].Clear();
   buffers[0].Show();
-  
+
 #ifdef DEBUG
   WiFi.printDiag(Serial);
 #endif
@@ -288,19 +288,19 @@ uint8_t Connect() {
 
 // Waits for a network command
 uint8_t Wait() {
-  
+
   // Check if data has been received
   uint16_t size = e131.parsePacket();
   if (size) {
-    
+
     // Skip preview packets
     if ((e131.packet.options & 0x80) != 0x80){
-        
+
         // Transision to the Processing state
-        return STATE_PROCESSING;   
+        return STATE_PROCESSING;
     }
   } else {
-    
+
     // Log a disconnection, ESP should reconnect on it's own.
     if (WiFi.status() != WL_CONNECTED) {
 
@@ -309,18 +309,18 @@ uint8_t Wait() {
 
       // Save the value so we don't relog it.
       wifiDisconnected = true;
-      
+
     } else {
 
       // If we are not already connected, log it.
       if (wifiDisconnected){Serial.println(F("WiFi connected..."));}
       wifiDisconnected = false;
     }
-  
+
     // Check for any code updates
-    ArduinoOTA.handle();   
+    ArduinoOTA.handle();
   }
-  
+
   return STATE_WAITING;
 }
 
@@ -341,8 +341,8 @@ uint8_t Process() {
 
   // Start code drives the action to process
   switch (startCode) {
-      
-    default: 
+
+    default:
       // if nothing else matches, do the default
       // default is optional
 
@@ -350,7 +350,7 @@ uint8_t Process() {
 
       // Write the entire set of data to the buffer
       buffers[bufferIndex].SetBuffer(e131.data, byteCount);
-      
+
     break;
   }
 
@@ -382,32 +382,32 @@ uint8_t Refresh() {
 void startOTA(const char *hostname){
 
   ArduinoOTA.onStart([]() {
-    
+
     Serial.println(F("OTA Update Starting..."));
-    
-    buffers[0].SetRepeat(YELLOW, PIXEL_SIZE); 
-    buffers[0].Show();   
+
+    buffers[0].SetRepeat(YELLOW, PIXEL_SIZE);
+    buffers[0].Show();
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
 
     // Clear the page, so the progress overwrites itself
     Serial.write(12);
-  
+
     // Provide update status.
     Serial.println(F("OTA Update Running..."));
     Serial.print(F("Progress: "));
     Serial.print(progress);
     Serial.print(F(" of  "));
     Serial.println(total);
-       
+
   });
- 
+
   ArduinoOTA.onEnd([]() { // do a fancy thing with our board led at end
 
     Serial.println(F("OTA Update Complete, Restarting..."));
-    
-    buffers[0].SetRepeat(GREEN, PIXEL_SIZE); 
+
+    buffers[0].SetRepeat(GREEN, PIXEL_SIZE);
     buffers[0].Show();
   });
 
