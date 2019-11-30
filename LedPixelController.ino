@@ -16,6 +16,7 @@ License.  If not, see <http://www.gnu.org/licenses/>.
 -------------------------------------------------------------------------*/
 
 // Includes
+#include <FS.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 #include "PixelBuffer.h"
@@ -25,6 +26,10 @@ License.  If not, see <http://www.gnu.org/licenses/>.
 #include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
 #include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
+#include <ESP8266HTTPClient.h>
+#include <ESP8266httpUpdate.h>
+
+#include <ArduinoJson.h>
 
 //#define DEBUG // turn on debugging
 
@@ -32,6 +37,9 @@ License.  If not, see <http://www.gnu.org/licenses/>.
 ADC_MODE(ADC_VCC);
 
 // Variable/Constant Definitions
+
+    const int FW_VERSION = 1002;
+    const char *fwUrlBase = "";
 
     // E131 Packet Parser
     E131 e131;
@@ -58,7 +66,7 @@ ADC_MODE(ADC_VCC);
     const uint8_t CHANNEL_COUNT = 8;
     const uint8_t PIXEL_SIZE = 3;
     const uint8_t PIXEL_COUNT = 150;
-    const uint8_t PINS[CHANNEL_COUNT] = {16, 5, 4, 0, 14, 12, 13, 15};
+    const uint8_t PINS[CHANNEL_COUNT] = {14, 12, 16, 5, 0, 4, 13, 15};
     uint8_t universeToBuffer[UNIVERSE_MAXCOUNT];
 
     // Colors (RGB)
@@ -88,7 +96,14 @@ ADC_MODE(ADC_VCC);
       {&pixelWriter, PIXEL_SIZE, PIXEL_COUNT, &PINS[7], 1}
     };
 
+    bool shouldSaveConfig = false;
+
     bool wifiDisconnected = false;
+
+void saveConfigCallback () {
+  Serial.println("Configuration save required");
+  shouldSaveConfig = true;
+}
 
 void setup() {
 
@@ -117,7 +132,73 @@ void setup() {
 
   Serial.println("");
 
+  Serial.println("Mounting Filesystem...");
+
+  if (SPIFFS.begin()) {
+    Serial.println("Mounted filesystem");
+    if (SPIFFS.exists("/config.json")) {
+      Serial.println("Reading config.json");
+      File configFile = SPIFFS.open("/config.json","r");
+      if (configFile) {
+        Serial.println("File opened");
+        size_t size = configFile.size();
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+        DynamicJsonDocument jsonBuffer(1024);
+        auto dsErr = deserializeJson(jsonBuffer,buf.get());
+        serializeJson(jsonBuffer,Serial);
+        if (!dsErr) {
+          Serial.println("\nParsed Json");
+          //strcpy(ssid,json["myssid"]);
+          //strcpy(password,json["mypassword"]);
+        } else {
+          Serial.println("Failed to load JSON Config");
+          Serial.println(dsErr.c_str());
+        }
+        configFile.close();
+      }
+    }
+  } else {
+    Serial.println("Failed to mount FS");
+  }
+
+  WiFiManager wifiManager;
+
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+
+  if (!wifiManager.autoConnect()) {
+    Serial.println("failed to connect and hit timeout");
+    delay(3000);
+
+    ESP.reset();
+    delay(5000);
+  }
+
+  Serial.println("Connected...Yay");
+
+  if (shouldSaveConfig) {
+    Serial.println("Saving Config");
+    DynamicJsonDocument jsonBuffer(1024);
+    jsonBuffer["ssid"] = "testssid";
+    jsonBuffer["password"] = "testpassword";
+
+    File configFile = SPIFFS.open("/config.json","w");
+    if (!configFile) {
+      Serial.println("Failed to open config file for writing");
+    }
+    serializeJson(jsonBuffer,Serial);
+    serializeJson(jsonBuffer,configFile);
+
+
+    configFile.close();
+  }
+
+  Serial.println("local ip");
+  Serial.println(WiFi.localIP());
+
 }
+
 
 // The main program loop
 void loop() {
@@ -213,13 +294,15 @@ uint8_t Connect() {
   Serial.print(ssid);
 
   // Make sure we are disconnected.
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_STA);
+  //WiFi.persistent(false);
+  //WiFi.mode(WIFI_STA);
 
   if (password != NULL){
-    WiFi.begin(ssid, password);
+    //WiFi.begin(ssid, password);
+//    wifiManager.autoConnect(ssid,password);
   }else{
-    WiFi.begin(ssid);
+    //WiFi.begin(ssid);
+  //  wifiManager.autoConnect(ssid);
   }
 
   // Wait for a connection
@@ -280,6 +363,9 @@ uint8_t Connect() {
 
   Serial.println(F("Connection complete"));
   Serial.println("");
+
+  // Check for FOTA updates
+  checkForUpdates();
 
   // Update the state
   return STATE_WAITING;
@@ -416,4 +502,68 @@ void startOTA(const char *hostname){
 
   ArduinoOTA.begin();
 
+}
+
+void checkForUpdates() {
+  String mac = getMAC();
+  String fwURL = String( fwUrlBase );
+  fwURL.concat( mac );
+  String fwVersionURL = fwURL;
+  fwVersionURL.concat( ".version" );
+
+  Serial.println( "Checking for firmware updates. ");
+  Serial.print( "MAC address: " );
+  Serial.println( mac );
+  Serial.print("Firmware version URL: " );
+  Serial.println( fwVersionURL );
+
+  HTTPClient httpClient;
+  httpClient.begin( fwVersionURL );
+  int httpCode = httpClient.GET();
+  if ( httpCode == 200 ) {
+    String newFWVersion = httpClient.getString();
+
+    Serial.print( "Current firmware version: " );
+    Serial.println( FW_VERSION );
+    Serial.print( "Available firmware version: " );
+    Serial.println( newFWVersion );
+
+    int newVersion = newFWVersion.toInt();
+
+    if ( newVersion > FW_VERSION ) {
+      Serial.println( "Preparing to update." );
+
+      String fwImageURL = fwURL;
+      fwImageURL.concat( ".bin" );
+
+      t_httpUpdate_return ret = ESPhttpUpdate.update (fwImageURL);
+
+      switch (ret) {
+        case HTTP_UPDATE_FAILED:
+          Serial.printf("HTTP_UPDATE_FAILED Error (%d): %s",ESPhttpUpdate.getLastError(),ESPhttpUpdate.getLastErrorString().c_str());
+          break;
+
+        case HTTP_UPDATE_NO_UPDATES:
+          Serial.println("HTTP_UPDATE_NO_UPDATES");
+          break;
+      }
+    } else {
+      Serial.println( "Already on latest version" );
+    }
+  } else {
+    Serial.print( "Firmware version check failed, got HTTP response code ");
+    Serial.println( httpCode );
+  }
+  httpClient.end();
+}
+
+String getMAC() {
+  uint8_t mac[6];
+  char result[14];
+
+  WiFi.macAddress(mac);
+
+  snprintf( result, sizeof( result ), "%02x%02x%02x%02x%02x%02x", mac[ 0 ], mac[ 1 ], mac[ 2 ], mac[ 3 ], mac[ 4 ], mac[ 5 ] );
+
+  return String( result );
 }
